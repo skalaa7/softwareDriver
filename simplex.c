@@ -15,11 +15,13 @@
 #include <linux/uaccess.h>
 #include <linux/delay.h>
 
+
 #define BUFF_SIZE 100
 #define NUMOFVAR 3
-#define NUMOFSLACK 3
+#define NUMOFSLACK NUMOFVAR
 #define ROWSIZE (NUMOFSLACK+1)
 #define COLSIZE (NUMOFSLACK+NUMOFVAR+1)
+#define SIZE (ROWSIZE*COLSIZE+2)
 
 MODULE_AUTHOR("Vladimir Vincan");
 MODULE_LICENSE("Dual BSD/GPL");
@@ -44,6 +46,11 @@ static ssize_t simplex_write (struct file *pfile, const char __user *buffer, siz
 
 static int  __init simplex_init(void);
 static void __exit simplex_exit(void);
+//user functions
+static void pivoting(void);
+static uint64_t mymul32x32(uint32_t a, uint32_t b,int time);
+static uint32_t multi(uint32_t a,uint32_t b,int time);
+
 
 struct device_info
 {
@@ -83,7 +90,13 @@ struct file_operations my_fops =
 	.write   = simplex_write,
 	.release = simplex_close,
 };
+////////global var
+uint32_t bram[SIZE];
+int p=0,q=0;
+int ready=1,start=0;
 
+int i = 0;
+int endRead = 0;
 // ------------------------------------------
 // PROBE & REMOVE
 // ------------------------------------------
@@ -256,83 +269,234 @@ static int simplex_close(struct inode *pinode, struct file *pfile)
 		printk(KERN_INFO "Succesfully closed file\n");
 		return 0;
 }
+/////////////////////
+////////USER FUNCTIONS
+static void pivoting(void)
+{
+	ready=0;
+	int c,d;
+	uint32_t newRow[COLSIZE];
+	uint32_t temp=0;
+	uint32_t sub=0;
+	uint32_t pivotColVal[ROWSIZE];
+	int pivotRow=0;
+	int pivotCol=(int)(bram[SIZE-2]>>21);
+	uint32_t pivot=bram[SIZE-1];
+	uint32_t m1=0,m2=0;	
+	uint32_t m3,m4=0;
+	printk(KERN_INFO "Pivoting\n");
+	for(c=0;c<COLSIZE;c++)
+	{
+		//printk(KERN_INFO "%u,%u\n",bram[pivot*COLSIZE+c],pivot);
+		m1=bram[pivotRow*COLSIZE+c];
+		m2=pivot;
+		newRow[c]=multi(m1,m2,c);
+		//printk(KERN_INFO "multi=%u,m1=%u,m2=%u\n",newRow[c],m1,m2);
+		bram[pivotRow*COLSIZE+c]=newRow[c];
+		
+		
+	}
+	printk(KERN_INFO "---------Phase1\n");
+	for(d=1;d<ROWSIZE;d++)
+	{
+		pivotColVal[d]=bram[d*COLSIZE+pivotCol];
+		//printk(KERN_INFO "pivotcolval,%u\n",pivotColVal[d]);
+		
+	}
+	printk(KERN_INFO "---------Phase2\n");
+	for(d=1;d<ROWSIZE;d++)
+	{
+		for(c=0;c<COLSIZE;c++)
+		{
+			m3=newRow[c];
+			m4=pivotColVal[d];
+			temp=multi(m3,m4,d*COLSIZE+c);
+			//if(d==ROWSIZE-1 && c==0)
+				printk(KERN_INFO "temp=%u",temp);
+				printk(KERN_INFO "temp=%#010x",temp);
+			sub=bram[d*COLSIZE+c]-temp;
+			//if(d==ROWSIZE-1 && c==0)
+			//printk(KERN_INFO "%d,%d,%u,%u,%u,%u,%u,\n",d,c,sub,bram[d*COLSIZE+c],temp,m3,m4);
+			bram[d*COLSIZE+c]=sub;
+			printk(KERN_INFO "sub=%#010x->",sub);
+			printk(KERN_INFO "%dend",d*COLSIZE+c);
+			
+		}
+	}
+	printk(KERN_INFO "---------Phase3\n");
+	
+	ready=1;
+}
+/////// unsigned 32bit multiplication
+uint64_t mymul32x32(uint32_t a, uint32_t b,int time)
+{
+  uint16_t va_high = (a >> 16) & 0xFFFF;
+  uint16_t va_low = a & 0xFFFF;
 
+  uint16_t vb_high = (b >> 16) & 0xFFFF;
+  uint16_t vb_low = b & 0xFFFF;
+
+  uint64_t mul_high_high = (uint64_t)((uint32_t)(va_high * vb_high))<< 32;
+  uint64_t mul_high_low = (uint64_t)((u32)(va_high << 16)) * vb_low;
+  uint64_t mul_low_high = (uint64_t)((u32)(vb_high << 16)) * va_low;
+  uint64_t mul_low_low = (uint64_t)(va_low * vb_low);
+
+  uint64_t res = 0;
+
+  res = mul_high_high;
+  res += mul_high_low;
+  res += mul_low_high;
+  res += mul_low_low;
+
+  return res;
+}
+//////////// signed 32bit multiplication
+static uint32_t multi(uint32_t a,uint32_t b,int time)
+{
+	printk(KERN_INFO "%dbegin",time);
+    int nega=0;
+    int negb=0;
+    uint64_t rez=0;
+    uint64_t del=0;
+    uint32_t r;
+    if(a >= 2147483648)
+    {
+        printk(KERN_INFO "%#010x",a);
+        a=~a;
+        a++;
+        printk(KERN_INFO "%#010x",a);
+        nega=1;
+    }
+    if(b >= 2147483648)
+    {
+       printk(KERN_INFO "%#010x",b);
+        b=~b;
+        b++;
+        printk(KERN_INFO "%#010x",b);
+        negb=1;
+    }
+    printk(KERN_INFO "a=%#010x\n",a);
+    printk(KERN_INFO "b=%#010x\n",b);
+    rez=mymul32x32(a,b,time); //unsigned 32bit multiplication
+   printk(KERN_INFO "rez=%#018x\n,%llu",rez,rez);
+   //rez=rez& 0x00000000ffffffff;
+    del=(rez/2097152)& 0x00000000ffffffff; printk(KERN_INFO "del=%#018x\n,%llu",del,del);
+    r=(uint32_t)del& 0xffffffff; printk(KERN_INFO "r=%#010x\n,%u",r,r);
+    if(nega ^ negb)
+    {
+        printk(KERN_INFO "%#010x->",r);
+        r=~r;
+        r++;
+       printk(KERN_INFO "%#010x\n",r);
+    }
+    
+    return r;
+}
+////////////
+
+
+/////////////////
+//////////////
 // ------------------------------------------
 // READ & WRITE
 // ------------------------------------------
-int bram[ROWSIZE*COLSIZE+1];
-int p=0;
 
 
-unsigned int log2wa=0, wa=0, log2ha=0, ha=0;
-unsigned int log2wb=0, wb=0, log2hb=0, hb=0;
-/* unsigned int log2w=0, width=0, log2h=0, height=0; */
 
-int i = 0;
-int endRead = 0;
-
-unsigned int _log2(unsigned int n)
-{
-  if (n == 2)
-    return (unsigned int)0;
-  if (n == 4)
-    return (unsigned int)1;
-  if (n == 8)
-    return (unsigned int)2;
-  if (n == 16)
-    return (unsigned int)3;
-  if (n == 32)
-    return (unsigned int)4;
-
-  printk(KERN_ERR "Wrong input size\n");
-  return (unsigned int)5;
-}
 
 ssize_t simplex_read(struct file *pfile, char __user *buffer, size_t length, loff_t *offset)
 {
   char buff[BUFF_SIZE];
   long int len=0;
   u32 bram_val=0;
-  u32 val;
+ 
+  
   int minor = MINOR(pfile->f_inode->i_rdev);
 
   /* printk(KERN_INFO "FFT2 READ entered \n"); */
   //printk(KERN_INFO "i = %d, len = %ld, end_read = %d\n", i, len, end_read);
   if (endRead){
-	printk(KERN_INFO "Reading complete\n");
+	printk(KERN_INFO "Reading complete \n");
 	endRead = 0;
 	return 0;
 }
 
   switch (minor)
     {
-    case 0: //device fft2
-      /* printk(KERN_INFO "i = %d\n", i);
-         */
-      printk(KERN_INFO "[READ] Succesfully read from fft2 device.\n");
-      len = scnprintf(buff, BUFF_SIZE, "[READ] wa = %d, ha = %d, wb = %d, hb = %d\n", wa, ha, wb, hb);
-      if (copy_to_user(buffer, buff, len))
-        return -EFAULT;
-      endRead = 1;
-      break;
-
-    case 1: //device bram_re
-      bram_val=bram[p];
-	if(p<ROWSIZE*COLSIZE+1)
-	{
-		len=scnprintf(buff,BUFF_SIZE,"%u",bram_val);
-	}
-	*offset+=len;
-	if(copy_to_user(buffer,buff,len))
+    case 0://citanje registri
+     
+  
+      len=scnprintf(buff,BUFF_SIZE,"%d %d\n",start,ready);
+      
+      if(copy_to_user(buffer,buff,len))
 	{
 		printk(KERN_ERR "Copy to user does not work\n");
 		return -EFAULT;
 	}
-	p++;
-	if(p==ROWSIZE*COLSIZE+1)
+	printk(KERN_INFO "Read from pivot,Start=%d,Ready=%d\n",start,ready);
+      endRead = 1;
+      break;
+
+    case 1: //device bram
+      //bram_val=bram[p];
+      ////////citanje sve odjednom
+	/*if(p<SIZE)
+	{
+		if(p==SIZE-1)
+		
+			len=scnprintf(buff,BUFF_SIZE,"%u\n",bram[p]);
+		else
+			len=scnprintf(buff,BUFF_SIZE,"%u ",bram[p]);
+		printk(KERN_INFO "%d,Succesfully read %#010x,lu\n",p,bram[p],len);
+		p++;
+		if(copy_to_user(buffer,buff,len))
+		{
+			printk(KERN_ERR "Copy to user does not work\n");
+			return -EFAULT;
+		}
+	}
+	else
 	{
 		printk(KERN_INFO "Succesfully read from bram\n");
 		p=0;
+		endRead=1;
+	}
+	break;*/
+	//offset+=len;
+	//endRead=1;
+	///////citanje vrstu po vrstu
+	printk(KERN_INFO "%d,%d\n",q,p);
+	if(p<COLSIZE)
+	{
+		if(p==COLSIZE-1)
+			len=scnprintf(buff,BUFF_SIZE,"%u\n",bram[q*COLSIZE+p]);
+		else
+			len=scnprintf(buff,BUFF_SIZE,"%u ",bram[q*COLSIZE+p]);
+			//printk(KERN_INFO "%d,%d,Succesfully read %#010x,%lu\n",q,p,bram[q*COLSIZE+p],len);
+		p++;
+		printk(KERN_INFO "-%d,%d\n",q,p);
+		if(copy_to_user(buffer,buff,len))
+		{
+			printk(KERN_ERR "Copy to user does not work\n");
+			return -EFAULT;
+		}
+	}
+	if(p==COLSIZE)
+	{
+		
+		if(q<ROWSIZE)
+		{
+			printk(KERN_INFO "--%d,%d\n",q,p);
+			q++;
+			p=0;
+		}
+		if(q==ROWSIZE)
+		{
+			printk(KERN_INFO "---%d,%d\n",q,p);
+			p=0;
+			q=0;
+			printk(KERN_INFO "Succesfully read from bram\n");
+		}
 		endRead=1;
 	}
       break;
@@ -351,114 +515,43 @@ ssize_t simplex_write(struct file *pfile, const char __user *buffer, size_t leng
 {
   //char buf[length+1];
   int minor = MINOR(pfile->f_inode->i_rdev);
-  unsigned int pos=0, val=0, val2=0;
+  int start_val=0;
   char buff[BUFF_SIZE];
 	int addr;
 	int ret;
-	unsigned int bram_val;
+	u32 bram_val;
   if (copy_from_user(buff, buffer, length))
     return -EFAULT;
   buff[length]='\0';
 
   switch (minor)
     {
-    case 0: //device fft2
-      sscanf(buff, "%u, %u, %u, %u", &wa, &ha, &wb, &hb);
-      printk(KERN_INFO "[WRITE] %u, %u, %u, %u\n", wa, ha, wb, hb);
-
-      // ===================
-      // FFT2 over A
-      // ===================
-
-      log2wa = _log2(wa);
-      log2ha = _log2(ha);
-      if ((log2wa > 4) || (log2ha > 4))
-        return -EFAULT;
-      wa  -= 1;
-      ha -= 1;
-      printk(KERN_INFO "[WRITE] %u, %u, %u, %u\n", log2wa, wa, log2ha, ha);
-      iowrite32(log2wa, fft2->base_addr + 0);
-      iowrite32(wa,     fft2->base_addr + 4);
-      iowrite32(log2ha, fft2->base_addr + 8);
-      iowrite32(ha,     fft2->base_addr + 12);
-
-      iowrite32(1, fft2->base_addr + 16);
-      udelay(1000);
-      iowrite32(0, fft2->base_addr + 16);
-      while (!ioread32(fft2->base_addr + 20))
-        udelay(1000);
-
-      printk(KERN_INFO "[WRITE] Succesfully wrote into fft2 device. %d, %d, %d, %d\n", log2wa, wa, log2ha, ha);
-
-      // ===================
-      // FFT2 over B (if exists)
-      // ===================
-
-      if (!wb || !hb)
-        break;
-
-      // swap A and B in bram
-      for (i = 0; i < 1024; ++i)
-        {
-          val  = ioread32(bram_re->base_addr + i*4);
-          val2 = ioread32(bram_re->base_addr + i*4 + 1024*4);
-          iowrite32 (val, bram_re->base_addr + i*4 + 1024*4);
-          iowrite32 (val2,bram_re->base_addr + i*4);
-
-          val  = ioread32(bram_im->base_addr + i*4);
-          val2 = ioread32(bram_im->base_addr + i*4 + 1024*4);
-          iowrite32 (val, bram_im->base_addr + i*4 + 1024*4);
-          iowrite32 (val2,bram_im->base_addr + i*4);
+    case 0: //upis u star registar
+      sscanf(buff,"%d",&start_val);
+      if(start_val==1)
+      {
+      	if(ready==1)
+	{
+		start=start_val;
+		pivoting();
         }
-      i = 0;
-
-      log2wb = _log2(wb);
-      log2hb = _log2(hb);
-      if ((log2wb > 4) || (log2hb > 4))
-        return -EFAULT;
-      wb  -= 1;
-      hb -= 1;
-      printk(KERN_INFO "[WRITE] %u, %u, %u, %u\n", log2wb, wb, log2hb, hb);
-      iowrite32(log2wb, fft2->base_addr + 0);
-      iowrite32(wb,     fft2->base_addr + 4);
-      iowrite32(log2hb, fft2->base_addr + 8);
-      iowrite32(hb,     fft2->base_addr + 12);
-
-      iowrite32(1, fft2->base_addr + 16);
-      udelay(1000);
-      iowrite32(0, fft2->base_addr + 16);
-      while (!ioread32(fft2->base_addr + 20))
-        udelay(1000);
-
-      // swap A and B in bram
-      for (i = 0; i < 1024; ++i)
-        {
-          val  = ioread32(bram_re->base_addr + i*4);
-          val2 = ioread32(bram_re->base_addr + i*4 + 1024*4);
-          iowrite32 (val, bram_re->base_addr + i*4 + 1024*4);
-          iowrite32 (val2,bram_re->base_addr + i*4);
-
-          val  = ioread32(bram_im->base_addr + i*4);
-          val2 = ioread32(bram_im->base_addr + i*4 + 1024*4);
-          iowrite32 (val, bram_im->base_addr + i*4 + 1024*4);
-          iowrite32 (val2,bram_im->base_addr + i*4);
-        }
-      i = 0;
-
-      printk(KERN_INFO "[WRITE] Succesfully wrote into fft2 device. %d, %d, %d, %d\n", log2wb, wb, log2hb, hb);
+      }
+      else
+      	start=start_val;
+      printk(KERN_INFO "Wrote succesfully to start register value %u\n",start_val);
       break;
 
-    case 1: //device bram
+    case 1: //upis u bram
       ret = sscanf(buff,"%d,%u",&addr,&bram_val);
 	
-
-	if((addr<ROWSIZE*COLSIZE+1) &&
+	
+	if((addr<SIZE) &&
 	(addr>=0)) 
 	{
 		
 		if(ret==2)//two parameter parsed in sscanf
 		{
-			printk(KERN_INFO "Succesfully wrote value %u", bram_val); 
+			//printk(KERN_INFO "Succesfully wrote value %#010x to %d", bram_val,addr); 
 			bram[addr] = bram_val; 
 	
 		}
@@ -473,11 +566,7 @@ ssize_t simplex_write(struct file *pfile, const char __user *buffer, size_t leng
 	}
       break;
 
-    case 2: //device bram_im
-      sscanf(buff, "%d, %d", &pos, &val);
-      iowrite32(val, bram_im->base_addr + (pos*4));
-      printk(KERN_INFO "[WRITE] Succesfully wrote into bram_im device. pos = %d, val = %d\n", pos, val);
-      break;
+    
 
     default:
       printk(KERN_INFO "[WRITE] Invalid minor. \n");
@@ -494,7 +583,17 @@ static int __init simplex_init(void)
 {
    printk(KERN_INFO "\n");
    printk(KERN_INFO "simplex driver starting insmod.\n");
-
+	
+	int i=0;
+	for(i=0;i<ROWSIZE*COLSIZE+1;i++)
+	{
+		bram[i]=0;
+	}
+	start=0;
+	ready=1;
+	
+	
+	
    if (alloc_chrdev_region(&my_dev_id, 0, 2, "simplex_region") < 0){
       printk(KERN_ERR "failed to register char device\n");
       return -1;

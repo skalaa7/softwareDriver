@@ -1,0 +1,112 @@
+static void pivoting(void)
+{
+	ready=0;
+	int c,d;
+	u32 newRow[COLSIZE];
+	u32 temp=0;
+	u32 sub=0;
+	u32 pivotColVal[ROWSIZE];
+	int pivotRow=0;
+	int pivotCol=(int)(bram[SIZE-2]>>21);
+	u32 pivot=bram[SIZE-1];
+	u32 m1=0,m2=0;	
+	u32 m3,m4=0;
+	printk(KERN_INFO "Pivoting\n");
+	for(c=0;c<COLSIZE;c++)
+	{
+		//printk(KERN_INFO "%u,%u\n",bram[pivot*COLSIZE+c],pivot);
+		m1=bram[pivotRow*COLSIZE+c];
+		m2=pivot;
+		newRow[c]=multi(m1,m2,c);
+		//printk(KERN_INFO "multi=%u,m1=%u,m2=%u\n",newRow[c],m1,m2);
+		bram[pivotRow*COLSIZE+c]=newRow[c];
+		
+	}
+	for(d=1;d<ROWSIZE;d++)
+	{
+		pivotColVal[d]=bram[d*COLSIZE+pivotCol];
+		//printk(KERN_INFO "pivotcolval,%u\n",pivotColVal[d]);
+	}
+	for(d=1;d<ROWSIZE;d++)
+	{
+		for(c=0;c<COLSIZE;c++)
+		{
+			m3=newRow[c];
+			m4=pivotColVal[d];
+			temp=multi(m3,m4,d*COLSIZE+c);
+			if(d==ROWSIZE-1 && c==0)
+			//	printk(KERN_INFO "temp=%u",temp);
+			sub=bram[d*COLSIZE+c]-temp;
+			if(d==ROWSIZE-1 && c==0)
+			//printk(KERN_INFO "%d,%d,%u,%u,%u,%u,%u,\n",d,c,sub,bram[d*COLSIZE+c],temp,m3,m4);
+			bram[d*COLSIZE+c]=sub;
+			
+		}
+	}
+	ready=1;
+}
+///////
+u64 mymul32x32(u32 a, u32 b,int time)
+{
+  u16 va_high = (a >> 16) & 0xFFFF; //printk(KERN_INFO "%#010x\n",va_high);
+  
+  u16 va_low = a & 0xFFFF; //printk(KERN_INFO "%#010x\n",va_low);
+  
+  u16 vb_high = (b >> 16) & 0xFFFF; //printk(KERN_INFO "%#010x\n",vb_high);
+  u16 vb_low = b & 0xFFFF; //printk(KERN_INFO "%#010x\n",vb_low);
+
+  u64 mul_high_high = (u64)((u32)(va_high * vb_high))<< 32; //printk(KERN_INFO "%#018x\n",mul_high_high);
+  u64 mul_high_low = (u64)((u32)(va_high << 16)) * vb_low; //printk(KERN_INFO "%#018x\n",mul_high_low);
+  u64 mul_low_high = (u64)((u32)(vb_high << 16)) * va_low; //printk(KERN_INFO "%#018x\n",mul_low_high);
+  u64 mul_low_low = (u64)(va_low * vb_low); //printk(KERN_INFO "%#018x\n",mul_low_low);
+
+  u64 res = 0;printk(KERN_INFO "%#018x\n",res);
+
+  res = mul_high_high; //printk(KERN_INFO "%#018x\n",res);
+  res += mul_high_low; //printk(KERN_INFO "%#018x\n",res);
+  res += mul_low_high; //printk(KERN_INFO "%#018x\n",res);
+  res += mul_low_low; //printk(KERN_INFO "%#018x\n",res);
+
+  return res;
+}
+u32 multi(u32 a,u32 b, int time)
+{
+
+	printk(KERN_INFO "%dbegin",time);
+    int nega=0;
+    int negb=0;
+    u64 rez=0;
+    u32 r;
+    if(a >= 2147483648)
+    {
+        printk(KERN_INFO "%#010x->",a);
+        a=~a;
+        a++;
+        printk(KERN_INFO "%#010x\n",a);
+        nega=1;
+    }
+    if(b >= 2147483648)
+    {
+       printk(KERN_INFO "%#010x->",b);
+        b=~b;
+        b++;
+        printk(KERN_INFO "%#010x\n",b);
+        negb=1;
+    }
+    printk(KERN_INFO "a=%#010x\n",a);
+    printk(KERN_INFO "b=%#010x\n",b);
+    rez=mymul32x32(a,b,time);
+   printk(KERN_INFO "rez=%#018x\n",rez);
+    r=(rez>>21);//&0xFFFFFFFF;
+   // r=(u32)rez;
+     printk(KERN_INFO "%#010x->",r);
+    if(nega ^ negb)
+    {
+        printk(KERN_INFO "%#010x->",r);
+        r=~r;
+        r++;
+       printk(KERN_INFO "%#010x\n",r);
+    }
+    printk(KERN_INFO "%dend",time);
+    return r;
+}
